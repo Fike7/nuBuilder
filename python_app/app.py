@@ -1,75 +1,73 @@
 # -*- coding: utf-8 -*-
 
-from flask import Flask
+from flask import Flask, request, jsonify, session
 
 # Import the core components that will be used by the application routes.
 from . import config
 from . import database
 from . import common
+from . import auth
+from . import forms
+from .session import DatabaseSessionInterface
 
 def create_app():
     """
     Create and configure an instance of the Flask application.
-    This uses the application factory pattern, which is a good practice.
     """
     app = Flask(__name__)
-
-    # Load configuration from the config.py file.
-    # Flask uses uppercase keys for its configuration variables.
     app.config.from_object('python_app.config')
+    app.session_interface = DatabaseSessionInterface()
+    app.session_cookie_name = app.config.get('DB_NAME', 'nubuilder4')
 
     @app.route('/')
     def index():
-        """
-        A simple root route to verify that the Flask application is running.
-        """
         return "<h1>nuBuilder Forte (Python Conversion)</h1><p>The web application skeleton is running.</p>"
 
-    # --- AI API Routes ---
-
-    # Import necessary modules for these routes
-    from flask import request, jsonify
-    from . import ai
-
-    @app.route('/api/ai/prompt-info', methods=['POST'])
-    def ai_prompt_info():
+    @app.route('/api/login', methods=['POST'])
+    def login():
         params = request.get_json()
-        if not params:
-            return jsonify({'error': 'Invalid JSON payload'}), 400
+        if not params or 'username' not in params or 'password' not in params:
+            return jsonify({'error': 'Username and password required'}), 400
 
-        prompt_info = ai.build_prompt_information(params)
-        return jsonify({'error': False, 'prompt': prompt_info})
+        username = params['username']
+        password = params['password']
 
-    @app.route('/api/ai/tags-from-prompt', methods=['POST'])
-    def ai_tags_from_prompt():
-        params = request.get_json()
-        if not params:
-            return jsonify({'error': 'Invalid JSON payload'}), 400
+        user = auth.check_globeadmin_login(username, password)
+        if not user:
+            user = auth.check_user_login(username, password)
 
-        result = ai.get_tags_from_prompt(params)
-        return jsonify(result)
+        if user and not user.get('error'):
+            session.clear()
+            auth.create_user_session(session, user)
+            return jsonify({'success': True, 'user_id': user['user_id']})
+        elif user and user.get('error') == 'expired':
+            return jsonify({'error': 'Account expired'}), 401
+        else:
+            return jsonify({'error': 'Invalid credentials'}), 401
 
-    @app.route('/api/ai/response', methods=['POST'])
-    def ai_response():
-        params = request.get_json()
-        if not params:
-            return jsonify({'error': 'Invalid JSON payload'}), 400
+    @app.route('/api/logout', methods=['POST'])
+    def logout():
+        session.clear()
+        return jsonify({'success': True})
 
-        prompt = params.get('prompt', '')
-        post_data = params.get('post_data', {})
+    # --- Form API Routes ---
+    @app.route('/api/getform', methods=['GET'])
+    def get_form():
+        form_id = request.args.get('form_id')
+        record_id = request.args.get('record_id')
 
-        result = ai.get_ai_response(prompt, post_data=post_data)
-        return jsonify(result)
+        if not form_id:
+            return jsonify({'error': 'form_id parameter is required'}), 400
 
+        form_data = forms.get_form_object(form_id, record_id)
 
-    # More routes will be added here as PHP files are converted.
+        if 'error' in form_data:
+            return jsonify(form_data), 404
+
+        return jsonify(form_data)
 
     return app
 
-# This block allows the app to be run directly for development purposes.
-# e.g., `python -m python_app.app`
-# In a production environment, a WSGI server like Gunicorn would be used.
 if __name__ == '__main__':
     app = create_app()
-    # Running in debug mode provides helpful error pages and auto-reloading.
     app.run(debug=True)
